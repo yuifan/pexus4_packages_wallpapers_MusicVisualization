@@ -22,15 +22,8 @@ import static android.renderscript.Sampler.Value.WRAP;
 
 import android.os.Handler;
 import android.os.SystemClock;
-import android.renderscript.Allocation;
-import android.renderscript.Element;
-import android.renderscript.Primitive;
-import android.renderscript.ProgramFragment;
-import android.renderscript.ProgramVertex;
-import android.renderscript.Sampler;
-import android.renderscript.ScriptC;
-import android.renderscript.SimpleMesh;
-import android.renderscript.Type;
+import android.renderscript.Mesh.Primitive;
+import android.renderscript.*;
 import android.renderscript.Element.Builder;
 import android.util.Log;
 
@@ -54,22 +47,20 @@ public class GenericWaveRS extends RenderScriptScene {
         public int width;
     }
     protected WorldState mWorldState = new WorldState();
-    private Type mStateType;
-    protected Allocation mState;
 
-    private SimpleMesh mCubeMesh;
+    ScriptC_waveform mScript;
+
+    private ScriptField_Vertex mVertexBuffer;
+
+    private Mesh mCubeMesh;
 
     protected Allocation mPointAlloc;
     // 1024 lines, with 4 points per line (2 space, 2 texture) each consisting of x and y,
     // so 8 floats per line.
     protected float [] mPointData = new float[1024*8];
 
-    private Allocation mLineIdxAlloc;
-    // 2 indices per line
-    private short [] mIndexData = new short[1024*2];
-
     private ProgramVertex mPVBackground;
-    private ProgramVertex.MatrixAllocation mPVAlloc;
+    private ProgramVertexFixedFunction.Constants mPVAlloc;
 
     protected AudioCapture mAudioCapture = null;
     protected int [] mVizData = new int[1024];
@@ -106,140 +97,88 @@ public class GenericWaveRS extends RenderScriptScene {
         super.resize(width, height);
         mWorldState.width = width;
         if (mPVAlloc != null) {
-            mPVAlloc.setupProjectionNormalized(mWidth, mHeight);
+            Matrix4f proj = new Matrix4f();
+            proj.loadProjectionNormalized(mWidth, mHeight);
+            mPVAlloc.setProjection(proj);
         }
     }
 
     @Override
     protected ScriptC createScript() {
 
-        // Create a renderscript type from a java class. The specified name doesn't
-        // really matter; the name by which we refer to the object in RenderScript
-        // will be specified later.
-        mStateType = Type.createFromClass(mRS, WorldState.class, 1, "WorldState");
-        // Create an allocation from the type we just created.
-        mState = Allocation.createTyped(mRS, mStateType);
+        mScript = new ScriptC_waveform(mRS, mResources, R.raw.waveform);
+
         // set our java object as the data for the renderscript allocation
         mWorldState.yRotation = 0.0f;
         mWorldState.width = mWidth;
-        mState.data(mWorldState);
+        updateWorldState();
 
-        /*
-         *  Now put our model in to a form that renderscript can work with:
-         *  - create a buffer of floats that are the coordinates for the points that define the cube
-         *  - create a buffer of integers that are the indices of the points that form lines
-         *  - combine the two in to a mesh
-         */
+        //  Now put our model in to a form that renderscript can work with:
+        //  - create a buffer of floats that are the coordinates for the points that define the cube
+        //  - create a buffer of integers that are the indices of the points that form lines
+        //  - combine the two in to a mesh
 
         // First set up the coordinate system and such
-        ProgramVertex.Builder pvb = new ProgramVertex.Builder(mRS, null, null);
+        ProgramVertexFixedFunction.Builder pvb = new ProgramVertexFixedFunction.Builder(mRS);
         mPVBackground = pvb.create();
-        mPVBackground.setName("PVBackground");
-        mPVAlloc = new ProgramVertex.MatrixAllocation(mRS);
-        mPVBackground.bindAllocation(mPVAlloc);
-        mPVAlloc.setupProjectionNormalized(mWidth, mHeight);
+        mPVAlloc = new ProgramVertexFixedFunction.Constants(mRS);
+        ((ProgramVertexFixedFunction)mPVBackground).bindConstants(mPVAlloc);
+        Matrix4f proj = new Matrix4f();
+        proj.loadProjectionNormalized(mWidth, mHeight);
+        mPVAlloc.setProjection(proj);
+
+        mScript.set_gPVBackground(mPVBackground);
+
+        mVertexBuffer = new ScriptField_Vertex(mRS, mPointData.length / 4);
 
         // Start creating the mesh
-        final SimpleMesh.Builder meshBuilder = new SimpleMesh.Builder(mRS);
-
-        // Create the Element for the points
-        Builder elementBuilder = new Builder(mRS);
-        elementBuilder.add(Element.ATTRIB_POSITION_2(mRS), "position");
-        elementBuilder.add(Element.ATTRIB_TEXTURE_2(mRS), "texture");
-        final Element vertexElement = elementBuilder.create();
-        final int vertexSlot = meshBuilder.addVertexType(vertexElement, mPointData.length / 4);
-        // Specify the type and number of indices we need. We'll allocate them later.
-        meshBuilder.setIndexType(Element.INDEX_16(mRS), mIndexData.length);
-        // This will be a line mesh
-        meshBuilder.setPrimitive(Primitive.LINE);
+        final Mesh.AllocationBuilder meshBuilder = new Mesh.AllocationBuilder(mRS);
+        meshBuilder.addVertexAllocation(mVertexBuffer.getAllocation());
+        // This will be a triangle strip mesh
+        meshBuilder.addIndexSetType(Primitive.TRIANGLE_STRIP);
 
         // Create the Allocation for the vertices
         mCubeMesh = meshBuilder.create();
-        mCubeMesh.setName("CubeMesh");
-        mPointAlloc = mCubeMesh.createVertexAllocation(vertexSlot);
-        mPointAlloc.setName("PointBuffer");
 
-        // Create the Allocation for the indices
-        mLineIdxAlloc = mCubeMesh.createIndexAllocation();
+        mPointAlloc = mVertexBuffer.getAllocation();
 
-        // Bind the allocations to the mesh
-        mCubeMesh.bindVertexAllocation(mPointAlloc, 0);
-        mCubeMesh.bindIndexAllocation(mLineIdxAlloc);
+        mScript.bind_gPoints(mVertexBuffer);
+        mScript.set_gPointBuffer(mPointAlloc);
+        mScript.set_gCubeMesh(mCubeMesh);
 
-        /*
-         *  put the vertex and index data in their respective buffers
-         */
-        updateWave();
-        for(int i = 0; i < mIndexData.length; i ++) {
-            mIndexData[i] = (short) i;
-        }
+        //  upload the vertex data
+        mPointAlloc.copyFromUnchecked(mPointData);
 
-        /*
-         *  upload the vertex and index data
-         */
-        mPointAlloc.data(mPointData);
-        mPointAlloc.uploadToBufferObject();
-        mLineIdxAlloc.data(mIndexData);
-        mLineIdxAlloc.uploadToBufferObject();
+        // load the texture
+        mTexture = Allocation.createFromBitmapResource(mRS, mResources, mTexId);
 
-        /*
-         * load the texture
-         */
-        mTexture = Allocation.createFromBitmapResourceBoxed(mRS, mResources, mTexId, RGB_565(mRS), false);
-        mTexture.setName("Tlinetexture");
-        mTexture.uploadToTexture(0);
+        mScript.set_gTlinetexture(mTexture);
 
         /*
          * create a program fragment to use the texture
          */
         Sampler.Builder samplerBuilder = new Sampler.Builder(mRS);
-        samplerBuilder.setMin(LINEAR);
-        samplerBuilder.setMag(LINEAR);
+        samplerBuilder.setMinification(LINEAR);
+        samplerBuilder.setMagnification(LINEAR);
         samplerBuilder.setWrapS(WRAP);
         samplerBuilder.setWrapT(WRAP);
         mSampler = samplerBuilder.create();
 
-        ProgramFragment.Builder builder = new ProgramFragment.Builder(mRS);
-        builder.setTexture(ProgramFragment.Builder.EnvMode.REPLACE,
-                           ProgramFragment.Builder.Format.RGBA, 0);
+        ProgramFragmentFixedFunction.Builder builder = new ProgramFragmentFixedFunction.Builder(mRS);
+        builder.setTexture(ProgramFragmentFixedFunction.Builder.EnvMode.REPLACE,
+                           ProgramFragmentFixedFunction.Builder.Format.RGBA, 0);
         mPfBackground = builder.create();
-        mPfBackground.setName("PFBackground");
         mPfBackground.bindSampler(mSampler, 0);
 
-        // Time to create the script
-        ScriptC.Builder sb = new ScriptC.Builder(mRS);
-        // Specify the name by which to refer to the WorldState object in the
-        // renderscript.
-        sb.setType(mStateType, "State", RSID_STATE);
-        sb.setType(mCubeMesh.getVertexType(0), "Points", RSID_POINTS);
-        // this crashes when uncommented
-        //sb.setType(mCubeMesh.getIndexType(), "Lines", RSID_LINES);
-        sb.setScript(mResources, R.raw.waveform);
-        sb.setRoot(true);
+        mScript.set_gPFBackground(mPfBackground);
 
-        ScriptC script = sb.create();
-        script.setClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        script.setTimeZone(TimeZone.getDefault().getID());
-
-        script.bindAllocation(mState, RSID_STATE);
-        script.bindAllocation(mPointAlloc, RSID_POINTS);
-        script.bindAllocation(mLineIdxAlloc, RSID_LINES);
-        script.bindAllocation(mPVAlloc.mAlloc, RSID_PROGRAMVERTEX);
-
-        return script;
+        return mScript;
     }
 
     @Override
-    public void setOffset(float xOffset, float yOffset,
-            float xStep, float yStep, int xPixels, int yPixels) {
-        // update our state, then push it to the renderscript
-
-        if (xStep <= 0.0f) {
-            xStep = xOffset / 2; // originator didn't set step size, assume we're halfway
-        }
-        // rotate 180 degrees per screen
-        mWorldState.yRotation = xStep == 0.f ? 0.f : (xOffset / xStep) * 180;
-        mState.data(mWorldState);
+    public void setOffset(float xOffset, float yOffset, int xPixels, int yPixels) {
+        mWorldState.yRotation = (xOffset * 4) * 180;
+        updateWorldState();
     }
 
     @Override
@@ -274,6 +213,13 @@ public class GenericWaveRS extends RenderScriptScene {
         mHandler.postDelayed(mDrawCube, 20);
         update();
         mWorldState.waveCounter++;
-        mState.data(mWorldState);
+        updateWorldState();
+    }
+
+    protected void updateWorldState() {
+        mScript.set_gYRotation(mWorldState.yRotation);
+        mScript.set_gIdle(mWorldState.idle);
+        mScript.set_gWaveCounter(mWorldState.waveCounter);
+        mScript.set_gWidth(mWorldState.width);
     }
 }

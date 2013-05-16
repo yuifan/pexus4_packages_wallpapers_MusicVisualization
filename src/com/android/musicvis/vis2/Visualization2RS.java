@@ -57,7 +57,8 @@ class Visualization2RS extends GenericWaveRS {
         if (len == 0) {
             if (mWorldState.idle == 0) {
                 mWorldState.idle = 1;
-                mState.data(mWorldState);
+                //mState.data(mWorldState);
+                updateWorldState();
             }
             return;
         }
@@ -67,7 +68,8 @@ class Visualization2RS extends GenericWaveRS {
 
         if (mWorldState.idle != 0) {
             mWorldState.idle = 0;
-            mState.data(mWorldState);
+            //mState.data(mWorldState);
+            updateWorldState();
         }
         // TODO: might be more efficient to push this in to renderscript
         for(int i = 0; i < len; i++) {
@@ -75,7 +77,7 @@ class Visualization2RS extends GenericWaveRS {
             mPointData[i*8+1] = amp;
             mPointData[i*8+5] = -amp;
         }
-        mPointAlloc.data(mPointData);
+        mPointAlloc.copyFromUnchecked(mPointData);
     }
 
 }

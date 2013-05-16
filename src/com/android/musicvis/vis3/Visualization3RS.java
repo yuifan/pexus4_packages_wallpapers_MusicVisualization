@@ -26,10 +26,9 @@ import android.graphics.Rect;
 import android.os.Handler;
 import android.renderscript.Allocation;
 import android.renderscript.Element;
-import android.renderscript.Primitive;
+import android.renderscript.Mesh.Primitive;
 import android.renderscript.ProgramVertex;
 import android.renderscript.ScriptC;
-import android.renderscript.SimpleMesh;
 import android.renderscript.Type;
 import android.renderscript.Element.Builder;
 import android.util.Log;
@@ -41,20 +40,17 @@ class Visualization3RS extends GenericWaveRS {
 
     private short [] mAnalyzer = new short[512];
 
+    float lastOffset;
+
     Visualization3RS(int width, int height) {
         super(width, height, R.drawable.ice);
+        lastOffset = 0;
     }
 
     @Override
-    public void setOffset(float xOffset, float yOffset,
-            float xStep, float yStep, int xPixels, int yPixels) {
-        // update our state, then push it to the renderscript
-        if (xStep <= 0.0f) {
-            xStep = xOffset / 2; // originator didn't set step size, assume we're halfway
-        }
-        // rotate 360 degrees per screen
-        mWorldState.yRotation = xStep == 0.f ? 0.f : (xOffset / xStep) * 360;
-        mState.data(mWorldState);
+    public void setOffset(float xOffset, float yOffset, int xPixels, int yPixels) {
+        mWorldState.yRotation = (xOffset * 4) * 360;
+        updateWorldState();
     }
 
     @Override
@@ -87,7 +83,7 @@ class Visualization3RS extends GenericWaveRS {
         if (len == 0) {
             if (mWorldState.idle == 0) {
                 mWorldState.idle = 1;
-                mState.data(mWorldState);
+                updateWorldState();
             }
             return;
         }
@@ -98,7 +94,7 @@ class Visualization3RS extends GenericWaveRS {
 
         if (mWorldState.idle != 0) {
             mWorldState.idle = 0;
-            mState.data(mWorldState);
+            updateWorldState();
         }
 
         for (int i = 1; i < len - 1; i++) {
@@ -117,8 +113,8 @@ class Visualization3RS extends GenericWaveRS {
 
         // distribute the data over mWidth samples in the middle of the mPointData array
         final int outlen = mPointData.length / 8;
-        final int width = mWidth;
-        final int skip = (outlen - mWidth) / 2;
+        final int width = mWidth > outlen ? outlen : mWidth;
+        final int skip = (outlen - width) / 2;
 
         int srcidx = 0;
         int cnt = 0;
@@ -133,7 +129,7 @@ class Visualization3RS extends GenericWaveRS {
                 cnt -= width;
             }
         }
-        mPointAlloc.data(mPointData);
+        mPointAlloc.copyFromUnchecked(mPointData);
     }
 
 }

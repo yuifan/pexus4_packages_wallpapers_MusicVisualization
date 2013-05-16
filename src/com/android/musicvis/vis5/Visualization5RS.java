@@ -18,19 +18,11 @@ package com.android.musicvis.vis5;
 
 import com.android.musicvis.R;
 import com.android.musicvis.RenderScriptScene;
+import com.android.musicvis.ScriptField_Vertex;
 import com.android.musicvis.AudioCapture;
 
 import android.os.Handler;
-import android.renderscript.Allocation;
-import android.renderscript.Element;
-import android.renderscript.Primitive;
-import android.renderscript.ProgramFragment;
-import android.renderscript.ProgramStore;
-import android.renderscript.ProgramVertex;
-import android.renderscript.Sampler;
-import android.renderscript.ScriptC;
-import android.renderscript.SimpleMesh;
-import android.renderscript.Type;
+import android.renderscript.*;
 import android.renderscript.Element.Builder;
 import android.renderscript.ProgramStore.BlendDstFunc;
 import android.renderscript.ProgramStore.BlendSrcFunc;
@@ -65,20 +57,22 @@ class Visualization5RS extends RenderScriptScene {
         public int   mWaveCounter;
     }
     WorldState mWorldState = new WorldState();
-    private Type mStateType;
-    private Allocation mState;
+
+    ScriptC_many mScript;
+    private com.android.musicvis.vis5.ScriptField_Vertex mVertexBuffer;
 
     private ProgramStore mPfsBackground;
     private ProgramFragment mPfBackgroundMip;
     private ProgramFragment mPfBackgroundNoMip;
+    private ProgramRaster mPr;
     private Sampler mSamplerMip;
     private Sampler mSamplerNoMip;
     private Allocation[] mTextures;
 
     private ProgramVertex mPVBackground;
-    private ProgramVertex.MatrixAllocation mPVAlloc;
+    private ProgramVertexFixedFunction.Constants mPVAlloc;
 
-    private SimpleMesh mCubeMesh;
+    private Mesh mCubeMesh;
 
     protected Allocation mPointAlloc;
     // 256 lines, with 4 points per line (2 space, 2 texture) each consisting of x and y,
@@ -120,12 +114,14 @@ class Visualization5RS extends RenderScriptScene {
     public void resize(int width, int height) {
         super.resize(width, height);
         if (mPVAlloc != null) {
-            mPVAlloc.setupProjectionNormalized(width, height);
+            Matrix4f proj = new Matrix4f();
+            proj.loadProjectionNormalized(width, height);
+            mPVAlloc.setProjection(proj);
         }
         mWorldState.mTilt = -20;
     }
 
-    @Override
+    /*@Override
     public void onTouchEvent(MotionEvent event) {
         switch(event.getAction()) {
             case MotionEvent.ACTION_DOWN:
@@ -143,62 +139,70 @@ class Visualization5RS extends RenderScriptScene {
                 }
                 mWorldState.mTilt = dy;
                 mState.data(mWorldState);
+                //updateWorldState();
         }
-    }
+    }*/
 
     @Override
-    public void setOffset(float xOffset, float yOffset,
-            float xStep, float yStep, int xPixels, int yPixels) {
+    public void setOffset(float xOffset, float yOffset, int xPixels, int yPixels) {
         // update our state, then push it to the renderscript
         mWorldState.mRotate = (xOffset - 0.5f) * 90;
-        mState.data(mWorldState);
+        updateWorldState();
     }
 
     @Override
     protected ScriptC createScript() {
-
-        // Create a renderscript type from a java class. The specified name doesn't
-        // really matter; the name by which we refer to the object in RenderScript
-        // will be specified later.
-        mStateType = Type.createFromClass(mRS, WorldState.class, 1, "WorldState");
-        // Create an allocation from the type we just created.
-        mState = Allocation.createTyped(mRS, mStateType);
+        mScript = new ScriptC_many(mRS, mResources, R.raw.many);
 
         // First set up the coordinate system and such
-        ProgramVertex.Builder pvb = new ProgramVertex.Builder(mRS, null, null);
+        ProgramVertexFixedFunction.Builder pvb = new ProgramVertexFixedFunction.Builder(mRS);
         mPVBackground = pvb.create();
-        mPVBackground.setName("PVBackground");
-        mPVAlloc = new ProgramVertex.MatrixAllocation(mRS);
-        mPVBackground.bindAllocation(mPVAlloc);
-        mPVAlloc.setupProjectionNormalized(mWidth, mHeight);
+        mPVAlloc = new ProgramVertexFixedFunction.Constants(mRS);
+        ((ProgramVertexFixedFunction)mPVBackground).bindConstants(mPVAlloc);
+        Matrix4f proj = new Matrix4f();
+        proj.loadProjectionNormalized(mWidth, mHeight);
+        mPVAlloc.setProjection(proj);
+
+        mScript.set_gPVBackground(mPVBackground);
 
         mTextures = new Allocation[8];
-        mTextures[0] = Allocation.createFromBitmapResourceBoxed(mRS, mResources, R.drawable.background, Element.RGBA_8888(mRS), true);
-        mTextures[0].setName("Tvumeter_background");
-        mTextures[1] = Allocation.createFromBitmapResourceBoxed(mRS, mResources, R.drawable.frame, Element.RGBA_8888(mRS), true);
-        mTextures[1].setName("Tvumeter_frame");
-        mTextures[2] = Allocation.createFromBitmapResourceBoxed(mRS, mResources, R.drawable.peak_on, Element.RGBA_8888(mRS), true);
-        mTextures[2].setName("Tvumeter_peak_on");
-        mTextures[3] = Allocation.createFromBitmapResourceBoxed(mRS, mResources, R.drawable.peak_off, Element.RGBA_8888(mRS), true);
-        mTextures[3].setName("Tvumeter_peak_off");
-        mTextures[4] = Allocation.createFromBitmapResourceBoxed(mRS, mResources, R.drawable.needle, Element.RGBA_8888(mRS), true);
-        mTextures[4].setName("Tvumeter_needle");
-        mTextures[5] = Allocation.createFromBitmapResourceBoxed(mRS, mResources, R.drawable.black, Element.RGB_565(mRS), false);
-        mTextures[5].setName("Tvumeter_black");
-        mTextures[6] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.albumart, Element.RGBA_8888(mRS), true);
-        mTextures[6].setName("Tvumeter_album");
-        mTextures[7] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.fire, Element.RGB_565(mRS), false);
-        mTextures[7].setName("Tlinetexture");
-
-        final int count = mTextures.length;
-        for (int i = 0; i < count; i++) {
-            mTextures[i].uploadToTexture(0);
-        }
+        mTextures[0] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.background,
+                                                           Allocation.MipmapControl.MIPMAP_ON_SYNC_TO_TEXTURE,
+                                                           Allocation.USAGE_GRAPHICS_TEXTURE);
+        mScript.set_gTvumeter_background(mTextures[0]);
+        mTextures[1] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.frame,
+                                                           Allocation.MipmapControl.MIPMAP_ON_SYNC_TO_TEXTURE,
+                                                           Allocation.USAGE_GRAPHICS_TEXTURE);
+        mScript.set_gTvumeter_frame(mTextures[1]);
+        mTextures[2] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.peak_on,
+                                                           Allocation.MipmapControl.MIPMAP_ON_SYNC_TO_TEXTURE,
+                                                           Allocation.USAGE_GRAPHICS_TEXTURE);
+        mScript.set_gTvumeter_peak_on(mTextures[2]);
+        mTextures[3] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.peak_off,
+                                                           Allocation.MipmapControl.MIPMAP_ON_SYNC_TO_TEXTURE,
+                                                           Allocation.USAGE_GRAPHICS_TEXTURE);
+        mScript.set_gTvumeter_peak_off(mTextures[3]);
+        mTextures[4] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.needle,
+                                                           Allocation.MipmapControl.MIPMAP_ON_SYNC_TO_TEXTURE,
+                                                           Allocation.USAGE_GRAPHICS_TEXTURE);
+        mScript.set_gTvumeter_needle(mTextures[4]);
+        mTextures[5] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.black,
+                                                           Allocation.MipmapControl.MIPMAP_ON_SYNC_TO_TEXTURE,
+                                                           Allocation.USAGE_GRAPHICS_TEXTURE);
+        mScript.set_gTvumeter_black(mTextures[5]);
+        mTextures[6] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.albumart,
+                                                           Allocation.MipmapControl.MIPMAP_ON_SYNC_TO_TEXTURE,
+                                                           Allocation.USAGE_GRAPHICS_TEXTURE);
+        mScript.set_gTvumeter_album(mTextures[6]);
+        mTextures[7] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.fire,
+                                                           Allocation.MipmapControl.MIPMAP_ON_SYNC_TO_TEXTURE,
+                                                           Allocation.USAGE_GRAPHICS_TEXTURE);
+        mScript.set_gTlinetexture(mTextures[7]);
 
         {
             Sampler.Builder builder = new Sampler.Builder(mRS);
-            builder.setMin(Value.LINEAR);
-            builder.setMag(Value.LINEAR);
+            builder.setMinification(Value.LINEAR);
+            builder.setMagnification(Value.LINEAR);
             builder.setWrapS(Value.WRAP);
             builder.setWrapT(Value.WRAP);
             mSamplerNoMip = builder.create();
@@ -206,103 +210,83 @@ class Visualization5RS extends RenderScriptScene {
 
         {
             Sampler.Builder builder = new Sampler.Builder(mRS);
-            builder.setMin(Value.LINEAR_MIP_LINEAR);
-            builder.setMag(Value.LINEAR);
+            builder.setMinification(Value.LINEAR_MIP_LINEAR);
+            builder.setMagnification(Value.LINEAR);
             builder.setWrapS(Value.WRAP);
             builder.setWrapT(Value.WRAP);
             mSamplerMip = builder.create();
         }
 
         {
-            ProgramFragment.Builder builder = new ProgramFragment.Builder(mRS);
-            builder.setTexture(ProgramFragment.Builder.EnvMode.REPLACE,
-                               ProgramFragment.Builder.Format.RGBA, 0);
+            ProgramFragmentFixedFunction.Builder builder = new ProgramFragmentFixedFunction.Builder(mRS);
+            builder.setTexture(ProgramFragmentFixedFunction.Builder.EnvMode.REPLACE,
+                               ProgramFragmentFixedFunction.Builder.Format.RGBA, 0);
             mPfBackgroundNoMip = builder.create();
-            mPfBackgroundNoMip.setName("PFBackgroundNoMip");
             mPfBackgroundNoMip.bindSampler(mSamplerNoMip, 0);
+            mScript.set_gPFBackgroundNoMip(mPfBackgroundNoMip);
         }
 
         {
-            ProgramFragment.Builder builder = new ProgramFragment.Builder(mRS);
-            builder.setTexture(ProgramFragment.Builder.EnvMode.REPLACE,
-                               ProgramFragment.Builder.Format.RGBA, 0);
+            ProgramFragmentFixedFunction.Builder builder = new ProgramFragmentFixedFunction.Builder(mRS);
+            builder.setTexture(ProgramFragmentFixedFunction.Builder.EnvMode.REPLACE,
+                               ProgramFragmentFixedFunction.Builder.Format.RGBA, 0);
             mPfBackgroundMip = builder.create();
-            mPfBackgroundMip.setName("PFBackgroundMip");
             mPfBackgroundMip.bindSampler(mSamplerMip, 0);
+            mScript.set_gPFBackgroundMip(mPfBackgroundMip);
         }
 
         {
-            ProgramStore.Builder builder = new ProgramStore.Builder(mRS, null, null);
+            ProgramRaster.Builder builder = new ProgramRaster.Builder(mRS);
+            builder.setCullMode(ProgramRaster.CullMode.NONE);
+            mPr = builder.create();
+            mScript.set_gPR(mPr);
+        }
+
+        {
+            ProgramStore.Builder builder = new ProgramStore.Builder(mRS);
             builder.setDepthFunc(ProgramStore.DepthFunc.EQUAL);
             //builder.setBlendFunc(BlendSrcFunc.SRC_ALPHA, BlendDstFunc.ONE_MINUS_SRC_ALPHA);
             builder.setBlendFunc(BlendSrcFunc.ONE, BlendDstFunc.ONE_MINUS_SRC_ALPHA);
-            builder.setDitherEnable(true); // without dithering there is severe banding
-            builder.setDepthMask(false);
+            builder.setDitherEnabled(true); // without dithering there is severe banding
+            builder.setDepthMaskEnabled(false);
             mPfsBackground = builder.create();
-            mPfsBackground.setName("PFSBackground");
+
+            mScript.set_gPFSBackground(mPfsBackground);
         }
 
         // Start creating the mesh
-        final SimpleMesh.Builder meshBuilder = new SimpleMesh.Builder(mRS);
+        mVertexBuffer = new com.android.musicvis.vis5.ScriptField_Vertex(mRS, mPointData.length / 4);
 
-        // Create the Element for the points
-        Builder elementBuilder = new Builder(mRS);
-        elementBuilder.add(Element.ATTRIB_POSITION_2(mRS), "position");
-        elementBuilder.add(Element.ATTRIB_TEXTURE_2(mRS), "texture");
-        final Element vertexElement = elementBuilder.create();
-        final int vertexSlot = meshBuilder.addVertexType(vertexElement, mPointData.length / 4);
-        // Specify the type and number of indices we need. We'll allocate them later.
-        meshBuilder.setIndexType(Element.INDEX_16(mRS), mIndexData.length);
+        final Mesh.AllocationBuilder meshBuilder = new Mesh.AllocationBuilder(mRS);
+        meshBuilder.addVertexAllocation(mVertexBuffer.getAllocation());
+        // Create the Allocation for the indices
+        mLineIdxAlloc = Allocation.createSized(mRS, Element.U16(mRS), mIndexData.length,
+                                               Allocation.USAGE_SCRIPT |
+                                               Allocation.USAGE_GRAPHICS_VERTEX);
         // This will be a line mesh
-        meshBuilder.setPrimitive(Primitive.LINE);
+        meshBuilder.addIndexSetAllocation(mLineIdxAlloc, Mesh.Primitive.LINE);
 
         // Create the Allocation for the vertices
         mCubeMesh = meshBuilder.create();
-        mCubeMesh.setName("CubeMesh");
-        mPointAlloc = mCubeMesh.createVertexAllocation(vertexSlot);
-        mPointAlloc.setName("PointBuffer");
 
-        // Create the Allocation for the indices
-        mLineIdxAlloc = mCubeMesh.createIndexAllocation();
+        mPointAlloc = mVertexBuffer.getAllocation();
 
-        // Bind the allocations to the mesh
-        mCubeMesh.bindVertexAllocation(mPointAlloc, 0);
-        mCubeMesh.bindIndexAllocation(mLineIdxAlloc);
+        mScript.bind_gPoints(mVertexBuffer);
+        mScript.set_gPointBuffer(mPointAlloc);
+        mScript.set_gCubeMesh(mCubeMesh);
 
-        /*
-         *  put the vertex and index data in their respective buffers
-         */
+        // put the vertex and index data in their respective buffers
         updateWave();
         for(int i = 0; i < mIndexData.length; i ++) {
             mIndexData[i] = (short) i;
         }
 
-        /*
-         *  upload the vertex and index data
-         */
-        mPointAlloc.data(mPointData);
-        mPointAlloc.uploadToBufferObject();
-        mLineIdxAlloc.data(mIndexData);
-        mLineIdxAlloc.uploadToBufferObject();
+        //  upload the vertex and index data
+        mPointAlloc.copyFromUnchecked(mPointData);
+        mLineIdxAlloc.copyFrom(mIndexData);
+        mLineIdxAlloc.syncAll(Allocation.USAGE_SCRIPT);
 
-        // Time to create the script
-        ScriptC.Builder sb = new ScriptC.Builder(mRS);
-        // Specify the name by which to refer to the WorldState object in the
-        // renderscript.
-        sb.setType(mStateType, "State", RSID_STATE);
-        sb.setScript(mResources, R.raw.many);
-        sb.setRoot(true);
-
-        ScriptC script = sb.create();
-        script.setClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        script.setTimeZone(TimeZone.getDefault().getID());
-
-        script.bindAllocation(mState, RSID_STATE);
-        script.bindAllocation(mPointAlloc, RSID_POINTS);
-        script.bindAllocation(mLineIdxAlloc, RSID_LINES);
-        script.bindAllocation(mPVAlloc.mAlloc, RSID_PROGRAMVERTEX);
-
-        return script;
+        return mScript;
     }
 
     @Override
@@ -413,10 +397,19 @@ class Visualization5RS extends RenderScriptScene {
                 mPointData[i*8+1] = amp;
                 mPointData[i*8+5] = -amp;
             }
-            mPointAlloc.data(mPointData);
+            mPointAlloc.copyFromUnchecked(mPointData);
             mWorldState.mWaveCounter++;
         }
 
-        mState.data(mWorldState);
+        updateWorldState();
+    }
+
+    protected void updateWorldState() {
+        mScript.set_gAngle(mWorldState.mAngle);
+        mScript.set_gPeak(mWorldState.mPeak);
+        mScript.set_gRotate(mWorldState.mRotate);
+        mScript.set_gTilt(mWorldState.mTilt);
+        mScript.set_gIdle(mWorldState.mIdle);
+        mScript.set_gWaveCounter(mWorldState.mWaveCounter);
     }
 }

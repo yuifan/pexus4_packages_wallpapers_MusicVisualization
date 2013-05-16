@@ -25,14 +25,7 @@ import com.android.musicvis.RenderScriptScene;
 import com.android.musicvis.AudioCapture;
 
 import android.os.Handler;
-import android.renderscript.Allocation;
-import android.renderscript.Element;
-import android.renderscript.ProgramFragment;
-import android.renderscript.ProgramStore;
-import android.renderscript.ProgramVertex;
-import android.renderscript.Sampler;
-import android.renderscript.ScriptC;
-import android.renderscript.Type;
+import android.renderscript.*;
 import android.renderscript.ProgramStore.BlendDstFunc;
 import android.renderscript.ProgramStore.BlendSrcFunc;
 
@@ -60,8 +53,8 @@ class Visualization4RS extends RenderScriptScene {
         public int   mPeak;
     }
     WorldState mWorldState = new WorldState();
-    private Type mStateType;
-    private Allocation mState;
+
+    ScriptC_vu mScript;
 
     private ProgramStore mPfsBackground;
     private ProgramFragment mPfBackground;
@@ -69,7 +62,7 @@ class Visualization4RS extends RenderScriptScene {
     private Allocation[] mTextures;
 
     private ProgramVertex mPVBackground;
-    private ProgramVertex.MatrixAllocation mPVAlloc;
+    private ProgramVertexFixedFunction.Constants mPVAlloc;
 
     private AudioCapture mAudioCapture = null;
     private int [] mVizData = new int[1024];
@@ -90,92 +83,76 @@ class Visualization4RS extends RenderScriptScene {
     public void resize(int width, int height) {
         super.resize(width, height);
         if (mPVAlloc != null) {
-            mPVAlloc.setupProjectionNormalized(width, height);
+            Matrix4f proj = new Matrix4f();
+            proj.loadProjectionNormalized(width, height);
+            mPVAlloc.setProjection(proj);
         }
     }
 
     @Override
     protected ScriptC createScript() {
 
-        // Create a renderscript type from a java class. The specified name doesn't
-        // really matter; the name by which we refer to the object in RenderScript
-        // will be specified later.
-        mStateType = Type.createFromClass(mRS, WorldState.class, 1, "WorldState");
-        // Create an allocation from the type we just created.
-        mState = Allocation.createTyped(mRS, mStateType);
+        mScript = new ScriptC_vu(mRS, mResources, R.raw.vu);
 
         // First set up the coordinate system and such
-        ProgramVertex.Builder pvb = new ProgramVertex.Builder(mRS, null, null);
+        ProgramVertexFixedFunction.Builder pvb = new ProgramVertexFixedFunction.Builder(mRS);
         mPVBackground = pvb.create();
-        mPVBackground.setName("PVBackground");
-        mPVAlloc = new ProgramVertex.MatrixAllocation(mRS);
-        mPVBackground.bindAllocation(mPVAlloc);
-        mPVAlloc.setupProjectionNormalized(mWidth, mHeight);
+        mPVAlloc = new ProgramVertexFixedFunction.Constants(mRS);
+        ((ProgramVertexFixedFunction)mPVBackground).bindConstants(mPVAlloc);
+        Matrix4f proj = new Matrix4f();
+        proj.loadProjectionNormalized(mWidth, mHeight);
+        mPVAlloc.setProjection(proj);
+
+        mScript.set_gPVBackground(mPVBackground);
 
         updateWave();
 
         mTextures = new Allocation[6];
-        mTextures[0] = Allocation.createFromBitmapResourceBoxed(mRS, mResources, R.drawable.background, Element.RGBA_8888(mRS), false);
-        mTextures[0].setName("Tvumeter_background");
-        mTextures[1] = Allocation.createFromBitmapResourceBoxed(mRS, mResources, R.drawable.frame, Element.RGBA_8888(mRS), false);
-        mTextures[1].setName("Tvumeter_frame");
-        mTextures[2] = Allocation.createFromBitmapResourceBoxed(mRS, mResources, R.drawable.peak_on, Element.RGBA_8888(mRS), false);
-        mTextures[2].setName("Tvumeter_peak_on");
-        mTextures[3] = Allocation.createFromBitmapResourceBoxed(mRS, mResources, R.drawable.peak_off, Element.RGBA_8888(mRS), false);
-        mTextures[3].setName("Tvumeter_peak_off");
-        mTextures[4] = Allocation.createFromBitmapResourceBoxed(mRS, mResources, R.drawable.needle, Element.RGBA_8888(mRS), false);
-        mTextures[4].setName("Tvumeter_needle");
-        mTextures[5] = Allocation.createFromBitmapResourceBoxed(mRS, mResources, R.drawable.black, Element.RGB_565(mRS), false);
-        mTextures[5].setName("Tvumeter_black");
-
-        final int count = mTextures.length;
-        for (int i = 0; i < count; i++) {
-            mTextures[i].uploadToTexture(0);
-        }
+        mTextures[0] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.background);
+        mScript.set_gTvumeter_background(mTextures[0]);
+        mTextures[1] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.frame);
+        mScript.set_gTvumeter_frame(mTextures[1]);
+        mTextures[2] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.peak_on);
+        mScript.set_gTvumeter_peak_on(mTextures[2]);
+        mTextures[3] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.peak_off);
+        mScript.set_gTvumeter_peak_off(mTextures[3]);
+        mTextures[4] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.needle);
+        mScript.set_gTvumeter_needle(mTextures[4]);
+        mTextures[5] = Allocation.createFromBitmapResource(mRS, mResources, R.drawable.black);
+        mScript.set_gTvumeter_black(mTextures[5]);
 
         Sampler.Builder samplerBuilder = new Sampler.Builder(mRS);
-        samplerBuilder.setMin(LINEAR);
-        samplerBuilder.setMag(LINEAR);
+        samplerBuilder.setMinification(LINEAR);
+        samplerBuilder.setMagnification(LINEAR);
         samplerBuilder.setWrapS(WRAP);
         samplerBuilder.setWrapT(WRAP);
         mSampler = samplerBuilder.create();
 
         {
-            ProgramFragment.Builder builder = new ProgramFragment.Builder(mRS);
-            builder.setTexture(ProgramFragment.Builder.EnvMode.REPLACE,
-                               ProgramFragment.Builder.Format.RGBA, 0);
+            ProgramFragmentFixedFunction.Builder builder = new ProgramFragmentFixedFunction.Builder(mRS);
+            builder.setTexture(ProgramFragmentFixedFunction.Builder.EnvMode.REPLACE,
+                               ProgramFragmentFixedFunction.Builder.Format.RGBA, 0);
             mPfBackground = builder.create();
-            mPfBackground.setName("PFBackground");
             mPfBackground.bindSampler(mSampler, 0);
+
+            mScript.set_gPFBackground(mPfBackground);
         }
 
         {
-            ProgramStore.Builder builder = new ProgramStore.Builder(mRS, null, null);
+            ProgramStore.Builder builder = new ProgramStore.Builder(mRS);
             builder.setDepthFunc(ALWAYS);
             //builder.setBlendFunc(BlendSrcFunc.SRC_ALPHA, BlendDstFunc.ONE_MINUS_SRC_ALPHA);
             builder.setBlendFunc(BlendSrcFunc.ONE, BlendDstFunc.ONE_MINUS_SRC_ALPHA);
-            builder.setDitherEnable(true); // without dithering there is severe banding
-            builder.setDepthMask(false);
+            builder.setDitherEnabled(true); // without dithering there is severe banding
+            builder.setDepthMaskEnabled(false);
             mPfsBackground = builder.create();
-            mPfsBackground.setName("PFSBackground");
+
+            mScript.set_gPFSBackground(mPfsBackground);
         }
 
-        // Time to create the script
-        ScriptC.Builder sb = new ScriptC.Builder(mRS);
-        // Specify the name by which to refer to the WorldState object in the
-        // renderscript.
-        sb.setType(mStateType, "State", RSID_STATE);
-        sb.setScript(mResources, R.raw.vu);
-        sb.setRoot(true);
+        mScript.setTimeZone(TimeZone.getDefault().getID());
 
-        ScriptC script = sb.create();
-        script.setClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        script.setTimeZone(TimeZone.getDefault().getID());
-
-        script.bindAllocation(mState, RSID_STATE);
-        script.bindAllocation(mPVAlloc.mAlloc, RSID_PROGRAMVERTEX);
-
-        return script;
+        return mScript;
     }
 
     @Override
@@ -265,6 +242,7 @@ class Visualization4RS extends RenderScriptScene {
         }
 
         mWorldState.mAngle = 131f - (mNeedlePos / 410f); // ~80 degree range
-        mState.data(mWorldState);
+        mScript.set_gAngle(mWorldState.mAngle);
+        mScript.set_gPeak(mWorldState.mPeak);
     }
 }

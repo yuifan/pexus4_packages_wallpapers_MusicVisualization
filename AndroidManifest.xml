@@ -31,11 +31,14 @@
         android:label="@string/wallpapers"
         android:icon="@drawable/ic_launcher_wallpaper">
 
+        <!-- Visualizer Wallpaper -->
         <!-- this wallpaper isn't very good, so disable it (using android:enabled=false doesn't work here for some reason)
         <service
             android:label="@string/wallpaper_vis1"
             android:name=".vis1.Visualization1"
-            android:permission="android.permission.BIND_WALLPAPER">
+            android:permission="android.permission.BIND_WALLPAPER"
+            android:enabled="@bool/config_enable_vis1"
+            >
             <intent-filter>
                 <action android:name="android.service.wallpaper.WallpaperService" />
             </intent-filter>
@@ -43,46 +46,57 @@
         </service>
         -->
 
+        <!-- Waveform Wallpaper -->
         <service
             android:label="@string/wallpaper_vis2"
             android:name=".vis2.Visualization2"
-            android:permission="android.permission.BIND_WALLPAPER">
+            android:permission="android.permission.BIND_WALLPAPER"
+            android:enabled="@bool/config_enable_vis2"
+            >
             <intent-filter>
                 <action android:name="android.service.wallpaper.WallpaperService" />
             </intent-filter>
             <meta-data android:name="android.service.wallpaper" android:resource="@xml/vis2" />
         </service>
 
+        <!-- Spectrum Wallpaper -->
         <service
             android:label="@string/wallpaper_vis3"
             android:name=".vis3.Visualization3"
-            android:permission="android.permission.BIND_WALLPAPER">
+            android:permission="android.permission.BIND_WALLPAPER"
+            android:enabled="@bool/config_enable_vis3"
+            >
             <intent-filter>
                 <action android:name="android.service.wallpaper.WallpaperService" />
             </intent-filter>
             <meta-data android:name="android.service.wallpaper" android:resource="@xml/vis3" />
         </service>
 
+        <!-- VU Meter Wallpaper -->
         <service
             android:label="@string/wallpaper_vis4"
             android:name=".vis4.Visualization4"
-            android:permission="android.permission.BIND_WALLPAPER">
+            android:permission="android.permission.BIND_WALLPAPER"
+            android:enabled="@bool/config_enable_vis4"
+            >
             <intent-filter>
                 <action android:name="android.service.wallpaper.WallpaperService" />
             </intent-filter>
             <meta-data android:name="android.service.wallpaper" android:resource="@xml/vis4" />
         </service>
 
+        <!-- Many Wallpaper -->
         <service
             android:label="@string/wallpaper_vis5"
             android:name=".vis5.Visualization5"
-            android:permission="android.permission.BIND_WALLPAPER">
+            android:permission="android.permission.BIND_WALLPAPER"
+            android:enabled="@bool/config_enable_vis5"
+            >
             <intent-filter>
                 <action android:name="android.service.wallpaper.WallpaperService" />
             </intent-filter>
             <meta-data android:name="android.service.wallpaper" android:resource="@xml/vis5" />
         </service>
-
 
     </application>
 
